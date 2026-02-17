@@ -1,0 +1,9 @@
+work/
+Backup/
+transcript
+
+*.log
+*.wlf
+*.ucdb
+
+.vscode/
