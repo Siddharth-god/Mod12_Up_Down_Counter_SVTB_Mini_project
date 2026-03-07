@@ -1,34 +1,3 @@
-//-------------------------------------------------------------RTL-------------------------------------------------------------
-// Mod 12 (Up_down) counter  // _---------- write coverage as well.
-module udm(
-    input logic [3:0] data_in, 
-    input logic clk,
-    input logic rstn,
-    input logic mode,
-    input logic load,
-    output logic [3:0] data_out
-);
-    always@(posedge clk)
-    begin 
-        if(!rstn)
-            data_out <= 4'd0;
-        else if(load)   
-            data_out <= data_in;
-        else if(mode == 1)
-            begin 
-                if(data_out == 11)
-                    data_out <= 4'd0;
-                else    
-                    data_out <= data_out + 1'b1;
-            end
-        else begin // If mode 0 then decrement or reset to 0.
-            if(data_out == 0)
-                data_out <= 4'd11;
-            else 
-                data_out <= data_out - 1'b1;  
-        end
-    end
-endmodule : udm
 
 //-------------------------------------------------------------INTERFACE-------------------------------------------------------------
 
@@ -589,17 +558,26 @@ module udm12_svtb;
     udm_if DUT_IF(clk);
     test test_h;
 
-    udm Up_down_mod_12_counter (.clk(clk),
+    udm12 Up_down_mod_12_counter (.clk(clk),
                                 .load(DUT_IF.load),
                                 .mode(DUT_IF.mode),
                                 .rstn(DUT_IF.rstn),
                                 .data_in(DUT_IF.data_in),
                                 .data_out(DUT_IF.data_out));
 
+    bind udm12 udm12_assertions UDM_ASSERTION(
+                                            .data_in(data_in),
+                                            .clk(clk),
+                                            .rstn(rstn),
+                                            .mode(mode),
+                                            .load(load),
+                                            .data_out(data_out)
+                                        );
+
     // Generate clock
     initial begin 
         clk = 1'b0;
-        forever #(cycle/2) clk = ~clk; // Why we are writing like this ?
+        forever #(cycle/2) clk = ~clk; 
     end
 
     initial begin 
@@ -609,3 +587,6 @@ module udm12_svtb;
         $finish;
     end
 endmodule : udm12_svtb
+
+
+
