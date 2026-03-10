@@ -17,7 +17,7 @@ module udm12_assertions(
     property load_check;
         @(posedge clk)
             disable iff(!rstn)
-                (load) |=> data_out == data_in;
+                (load) |=> data_out == $past(data_in); //NOTE : Data out is output of previous data in, so if we directly assign current data in to data out the load check will fail.
     endproperty 
 
     // mode 1
@@ -53,10 +53,13 @@ module udm12_assertions(
             else 
                 $display("FAIL : -----RESET-----");
 
-    LOAD_CHECK : assert property (load_check)
+    LOAD_CHECK : assert property (load_check)  
                     $display("PASS : -----LOAD_CHECK-----");
-                else 
-                    $display("FAIL : -----LOAD_CHECK-----");
+                else begin
+                    $display("FAIL : -----LOAD_CHECK----- at %0t",$time);
+                    $display("data in = %0d ,load = %0d, data out = %0d, %0t",data_in, load, data_out,$time);
+                end
+
 
     MODE_1_MAX_CHECK : assert property (mode1_max_check)
                         $display("PASS : -----MODE_1_MAX_CHECK-----");
