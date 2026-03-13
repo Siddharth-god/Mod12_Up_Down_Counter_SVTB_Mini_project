@@ -38,13 +38,14 @@ endinterface : udm12_if
 
 // UVM_TB  TFF 
 
+// Transaction -----------------------------------------------------------------------------------------
 class xtn extends uvm_sequence_item;
 
     `uvm_object_utils(xtn)
 
     rand bit [3:0] data_in;
     rand bit mode, load;
-    bit rstn;
+    rand bit rstn;
     bit [3:0] data_out;
 
     function new(string name = "xtn");
@@ -54,8 +55,9 @@ class xtn extends uvm_sequence_item;
     constraint valid_vals{
         foreach(data_in[i])
             data_in inside {[0:11]};
-        mode dist { 1:=6, 0:=4};
-        load dist { 1:=2, 0:=8};
+        mode dist { 1:=5, 0:=5};
+        load dist { 1:=5, 0:=5};
+        rstn dist { 1:=8, 0:=2};
     }
 
     // do copy and compare not needed here - using basic comparision in sb
@@ -71,7 +73,7 @@ class xtn extends uvm_sequence_item;
 
 endclass 
 
-
+// Config -----------------------------------------------------------------------------------------
 class global_config extends uvm_object;
     `uvm_object_utils(global_config)
 
@@ -87,25 +89,100 @@ class global_config extends uvm_object;
     endfunction
 endclass 
 
-class seq extends uvm_sequence #(xtn);
+// sequence -----------------------------------------------------------------------------------------
 
-    `uvm_object_utils(seq)
+class seq_base extends uvm_sequence #(xtn);
 
-    function new(string name = "seq");
+    `uvm_object_utils(seq_base)
+
+    function new(string name = "seq_base");
+        super.new(name);
+    endfunction
+
+endclass 
+
+// reset sequence
+class seq_rstn extends seq_base;
+    `uvm_object_utils(seq_rstn)
+
+    function new(string name = "seq_rstn");
         super.new(name);
     endfunction
 
     task body();
-        repeat(10) begin
+        m_sequencer.grab(this);
+        repeat(1) begin
             req = xtn::type_id::create("req");
             start_item(req);
-            assert(req.randomize());
+            assert(req.randomize() with {rstn == 0;});
             finish_item(req);
         end
+        m_sequencer.ungrab(this);
+    endtask
+endclass 
+
+// load 1 - data in sequence
+class seq_load extends seq_base;
+    `uvm_object_utils(seq_load)
+
+    function new(string name = "seq_load");
+        super.new(name);
+    endfunction
+
+    task body();
+        m_sequencer.lock(this);
+        repeat(7) begin
+            req = xtn::type_id::create("req");
+            start_item(req);
+            assert(req.randomize() with {rstn == 1 && load == 1;});
+            finish_item(req);
+        end
+        m_sequencer.unlock(this);
+    endtask
+endclass 
+
+// mode 1 - Upcount sequence 
+class seq_md1 extends seq_base;
+    `uvm_object_utils(seq_md1)
+
+    function new(string name = "seq_md1");
+        super.new(name);
+    endfunction
+
+    task body();
+        m_sequencer.grab(this);
+        repeat(5) begin
+            req = xtn::type_id::create("req");
+            start_item(req);
+            assert(req.randomize() with {rstn == 1 && load == 0 && mode == 1;});
+            finish_item(req);
+        end
+        m_sequencer.ungrab(this);
+    endtask
+endclass 
+
+// mode 0 - Downcount sequence 
+class seq_md0 extends seq_base;
+    `uvm_object_utils(seq_md0)
+
+    function new(string name = "seq_md0");
+        super.new(name);
+    endfunction
+
+    task body();
+        m_sequencer.grab(this);
+        repeat(5) begin
+            req = xtn::type_id::create("req");
+            start_item(req);
+            assert(req.randomize() with {rstn == 1 && load == 0 && mode == 0;});
+            finish_item(req);
+        end
+        m_sequencer.ungrab(this);
     endtask
 endclass 
 
 
+// Sequencer -----------------------------------------------------------------------------------------
 class seqr extends uvm_sequencer #(xtn);
 
     `uvm_component_utils(seqr)
@@ -116,7 +193,56 @@ class seqr extends uvm_sequencer #(xtn);
 
 endclass 
 
+// Virtual sequencer ---------------------------------------------------------------------------------
+class vseqr extends uvm_sequencer #(uvm_sequence_item);
 
+    `uvm_component_utils(vseqr)
+
+    function new(string name, uvm_component parent);
+        super.new(name,parent);
+    endfunction 
+
+    seqr seqrh;
+
+endclass 
+
+// Virtual sequence -----------------------------------------------------------------------------------
+class vseq extends uvm_sequence #(uvm_sequence_item);
+
+    `uvm_object_utils(vseq)
+
+    function new(string name = "vseq");
+        super.new(name);
+    endfunction
+
+    vseqr vseqrh;
+
+    seq_rstn seq_rstn_h;
+    seq_load seq_load_h;
+    seq_md1 seq_md1_h;
+    seq_md0 seq_md0_h;
+
+    task body();
+
+        if(!$cast(vseqrh,m_sequencer))
+            `uvm_fatal(get_type_name(),"Failed to cast");
+
+        seq_rstn_h = seq_rstn::type_id::create("seq_rstn_h");
+        seq_load_h = seq_load::type_id::create("seq_load_h");
+        seq_md1_h = seq_md1::type_id::create("seq_md1_h");
+        seq_md0_h = seq_md0::type_id::create("seq_md0_h");
+
+        fork 
+            seq_rstn_h.start(vseqrh.seqrh); // grab - to make sure rstn alwaysg gets exacuted first. 
+            seq_load_h.start(vseqrh.seqrh); // lock - to give exclusive access to this sequence
+            seq_md1_h.start(vseqrh.seqrh);  // grab - 3rd priority
+            seq_md0_h.start(vseqrh.seqrh);  // grab - 2nd priority
+        join
+    endtask 
+
+endclass 
+
+// Driver -----------------------------------------------------------------------------------------
 class driver extends uvm_driver #(xtn);
 
     `uvm_component_utils(driver)
@@ -141,8 +267,9 @@ class driver extends uvm_driver #(xtn);
 
     task run_phase(uvm_phase phase);
 
-        // Initial reset sequence
-        @(vif.drv_cb);
+        // Initial reset sequence  // NOTE : As we are giving sequence for reset - we don't need to give it manually - but remember, sequence is used just increase the number of sequences, manual sequence is always better. 
+
+/*        @(vif.drv_cb);
         vif.drv_cb.rstn <= 0;
         vif.drv_cb.data_in <= 0;
         vif.drv_cb.mode <= 0;
@@ -154,17 +281,17 @@ class driver extends uvm_driver #(xtn);
         // Release reset
         @(vif.drv_cb);
         vif.drv_cb.rstn <= 1;
-
+*/ 
         // Now drive transactions forever
         forever begin
             seq_item_port.get_next_item(req);
 
             @(vif.drv_cb);
+            vif.drv_cb.rstn <= req.rstn;
             vif.drv_cb.data_in <= req.data_in;
             vif.drv_cb.mode <= req.mode;
             vif.drv_cb.load <= req.load;
             // keep reset stable high during normal operation
-            vif.drv_cb.rstn <= 1;
 
             seq_item_port.item_done();
         end
@@ -172,7 +299,7 @@ class driver extends uvm_driver #(xtn);
     endtask
 endclass 
 
-
+// Monitor -----------------------------------------------------------------------------------------
 class monitor1 extends uvm_monitor;
 
     `uvm_component_utils(monitor1)
@@ -207,7 +334,8 @@ class monitor1 extends uvm_monitor;
             
             @(vif.mon_cb)  
 
-                if(vif.mon_cb.rstn) begin
+                //if(vif.mon_cb.rstn) // only sample on off rstn. To check rstn behaviour we cannot use this.
+                begin
                     sample_dut = xtn::type_id::create("sample_dut");
 
                     sample_dut.data_in = vif.mon_cb.data_in;
@@ -223,7 +351,6 @@ class monitor1 extends uvm_monitor;
         end
     endtask 
 endclass 
-
 
 
 class monitor2 extends uvm_monitor;
@@ -260,7 +387,8 @@ class monitor2 extends uvm_monitor;
             
             @(vif.mon_cb)  
 
-            if(vif.mon_cb.rstn) begin
+            //if(vif.mon_cb.rstn) // We are using rstn sequence -to observe rstn behaviour we cannot use this condition as this will skip rstn = 0
+            begin
                 sample_dut = xtn::type_id::create("sample_dut");
                 sample_dut.data_out = vif.mon_cb.data_out;
 
@@ -274,7 +402,7 @@ class monitor2 extends uvm_monitor;
 
 endclass 
 
-
+// Agent -----------------------------------------------------------------------------------------
 class agent_drv extends uvm_agent;
 
     `uvm_component_utils(agent_drv)
@@ -328,7 +456,7 @@ class agent_mon extends uvm_agent;
 endclass 
 
 
-
+// Scoreboard -----------------------------------------------------------------------------------------
 class sb extends uvm_scoreboard;
 
     `uvm_component_utils(sb)
@@ -378,13 +506,14 @@ class sb extends uvm_scoreboard;
 
             if(exp_op == out_xtn.data_out)  
                 `uvm_info(get_type_name(),
-                    $sformatf("\n[---Data Match successful---] ==> DATA IN = %0d MODE = %0d LOAD = %0d ==> [ DATA OUT = EXP OUT ] : [%0d = %0d]\n",
-                            in_xtn.data_in,
-                            in_xtn.mode,
-                            in_xtn.load,
-                            out_xtn.data_out,
-                            exp_op),
-                    UVM_LOW)  
+                            $sformatf("\n[---Data Match successful---] ==> DATA IN = %0d MODE = %0d LOAD = %0d RESET = %0d ==> [ DATA OUT = EXP OUT ] : [%0d = %0d]\n",
+                                    in_xtn.data_in,
+                                    in_xtn.mode,
+                                    in_xtn.load,
+                                    in_xtn.rstn,
+                                    out_xtn.data_out,
+                                    exp_op),
+                            UVM_LOW)  
             else 
                 `uvm_error(get_type_name(), $sformatf(
                             "\n\nScoreboard Error [Data Mismatch]: \n Received Transaction: %d \n Expected Transaction: %d\n",
@@ -396,6 +525,7 @@ class sb extends uvm_scoreboard;
 
 endclass 
 
+// Env -----------------------------------------------------------------------------------------
 class env extends uvm_env;
 
     `uvm_component_utils(env)
@@ -403,6 +533,7 @@ class env extends uvm_env;
     agent_drv drv_agnth;
     agent_mon mon_agnth;
     sb sb_h;
+    vseqr vseqrh;
 
     function new(string name, uvm_component parent);
         super.new(name,parent);
@@ -410,6 +541,7 @@ class env extends uvm_env;
 
     function void build_phase(uvm_phase phase);
         super.build_phase(phase);
+        vseqrh = vseqr::type_id::create("vseqrh",this);
         drv_agnth = agent_drv::type_id::create("drv_agnth",this);
         mon_agnth = agent_mon::type_id::create("mon_agnth",this);
         sb_h = sb::type_id::create("sb_h",this);
@@ -418,6 +550,7 @@ class env extends uvm_env;
     function void connect_phase(uvm_phase phase);
         super.connect_phase(phase);
 
+        vseqrh.seqrh = drv_agnth.seqrh;
         // connect monitor analysis port with fifo tlm port
         drv_agnth.monh.monitor_port.connect(sb_h.fifo_driver_mon_port.analysis_export);
         mon_agnth.monh.monitor2_port.connect(sb_h.fifo_sampler_mon_port.analysis_export);
@@ -425,12 +558,14 @@ class env extends uvm_env;
 
 endclass 
 
+// Test -----------------------------------------------------------------------------------------
 class test extends uvm_test;
 
     `uvm_component_utils(test)
 
     env envh;
     global_config g_cfg;
+    vseq vseqh;
 
     function new(string name, uvm_component parent);
         super.new(name,parent);
@@ -440,7 +575,8 @@ class test extends uvm_test;
         super.build_phase(phase);
 
         g_cfg = global_config::type_id::create("g_cfg");
-   
+        vseqh = vseq::type_id::create("vseqh");
+
         if(!uvm_config_db #(virtual udm12_if)::get( this, "", "udm12_if", g_cfg.vif))
             `uvm_fatal(get_full_name(),"Cannot get() global config from ---TOP---")
 
@@ -455,18 +591,18 @@ class test extends uvm_test;
 
     task run_phase(uvm_phase phase);
 
-        seq seqh;
+        //seq_base seqh;
 
         phase.raise_objection(this);
-        #100;
-        seqh = seq::type_id::create("seqh");
-        seqh.start(envh.drv_agnth.seqrh);
+    
+        vseqh.start(envh.vseqrh);
+        //seqh = seq_base::type_id::create("seqh");
+        //seqh.start(envh.drv_agnth.seqrh);
         phase.drop_objection(this);
     endtask 
 endclass 
 
-
-
+// Top -----------------------------------------------------------------------------------------
 module uvm_udm12;
 
     bit clk = 0;
