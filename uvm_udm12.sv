@@ -131,7 +131,7 @@ class seq_load extends seq_base;
 
     task body();
         m_sequencer.lock(this);
-        repeat(7) begin
+        repeat(20) begin
             req = xtn::type_id::create("req");
             start_item(req);
             assert(req.randomize() with {rstn == 1 && load == 1;});
@@ -151,7 +151,7 @@ class seq_md1 extends seq_base;
 
     task body();
         m_sequencer.grab(this);
-        repeat(5) begin
+        repeat(20) begin
             req = xtn::type_id::create("req");
             start_item(req);
             assert(req.randomize() with {rstn == 1 && load == 0 && mode == 1;});
@@ -171,7 +171,7 @@ class seq_md0 extends seq_base;
 
     task body();
         m_sequencer.grab(this);
-        repeat(5) begin
+        repeat(20) begin
             req = xtn::type_id::create("req");
             start_item(req);
             assert(req.randomize() with {rstn == 1 && load == 0 && mode == 0;});
@@ -267,21 +267,6 @@ class driver extends uvm_driver #(xtn);
 
     task run_phase(uvm_phase phase);
 
-        // Initial reset sequence  // NOTE : As we are giving sequence for reset - we don't need to give it manually - but remember, sequence is used just increase the number of sequences, manual sequence is always better. 
-
-/*        @(vif.drv_cb);
-        vif.drv_cb.rstn <= 0;
-        vif.drv_cb.data_in <= 0;
-        vif.drv_cb.mode <= 0;
-        vif.drv_cb.load <= 0;
-
-        // Hold reset low for a few cycles
-        repeat (5) @(vif.drv_cb);
-
-        // Release reset
-        @(vif.drv_cb);
-        vif.drv_cb.rstn <= 1;
-*/ 
         // Now drive transactions forever
         forever begin
             seq_item_port.get_next_item(req);
@@ -291,7 +276,6 @@ class driver extends uvm_driver #(xtn);
             vif.drv_cb.data_in <= req.data_in;
             vif.drv_cb.mode <= req.mode;
             vif.drv_cb.load <= req.load;
-            // keep reset stable high during normal operation
 
             seq_item_port.item_done();
         end
@@ -464,16 +448,44 @@ class sb extends uvm_scoreboard;
     uvm_tlm_analysis_fifo #(xtn) fifo_driver_mon_port;
     uvm_tlm_analysis_fifo #(xtn) fifo_sampler_mon_port;
 
+    xtn udm_cov1; 
+    xtn udm_cov2; 
+
     bit [3:0] exp_op;
+
+    covergroup udm_cg;
+        DATA_IN : coverpoint udm_cov1.data_in{
+            bins low = {[0:3]};
+            bins mid = {[4:7]};
+            bins high = {[8:11]};
+        }
+        RSTN : coverpoint udm_cov1.rstn;
+        LOAD : coverpoint udm_cov1.load;
+        MODE : coverpoint udm_cov1.mode; 
+
+        DATA_OUT : coverpoint udm_cov2.data_out{
+            bins low = {[0:3]};
+            bins mid = {[4:7]};
+            bins high = {[8:11]};
+        }
+
+        DIN_x_LD : cross DATA_IN, LOAD; 
+        DIN_x_MD : cross DATA_IN, MODE;
+        DIN_x_DOUT : cross DATA_IN, DATA_OUT;
+
+    endgroup 
+
     
     function new(string name, uvm_component parent);
         super.new(name,parent);
         fifo_driver_mon_port = new("fifo_driver_mon_port",this); // Remember second argument "this" is very important here. 
         fifo_sampler_mon_port = new("fifo_sampler_mon_port",this);
+
+        udm_cg = new();
     endfunction 
 
 
-    function void exp_out(ref xtn xtn_h);
+    function void exp_out(xtn xtn_h);
 
         if(!xtn_h.rstn)
             exp_op = 4'd0;
@@ -495,32 +507,32 @@ class sb extends uvm_scoreboard;
     endfunction 
 
     task run_phase(uvm_phase phase);
-
         xtn in_xtn;
         xtn out_xtn;
-        
-        forever begin
-           
-            fifo_sampler_mon_port.get(out_xtn);
-            fifo_driver_mon_port.get(in_xtn);
+            forever begin 
+                fifo_driver_mon_port.get(in_xtn);
+                fifo_sampler_mon_port.get(out_xtn);
 
-            if(exp_op == out_xtn.data_out)  
-                `uvm_info(get_type_name(),
-                            $sformatf("\n[---Data Match successful---] ==> DATA IN = %0d MODE = %0d LOAD = %0d RESET = %0d ==> [ DATA OUT = EXP OUT ] : [%0d = %0d]\n",
-                                    in_xtn.data_in,
-                                    in_xtn.mode,
-                                    in_xtn.load,
-                                    in_xtn.rstn,
-                                    out_xtn.data_out,
-                                    exp_op),
-                            UVM_LOW)  
-            else 
-                `uvm_error(get_type_name(), $sformatf(
-                            "\n\nScoreboard Error [Data Mismatch]: \n Received Transaction: %d \n Expected Transaction: %d\n",
-                            out_xtn.data_out, exp_op));
+                udm_cov1 = in_xtn; 
+                udm_cov2 = out_xtn;
 
-                exp_out(in_xtn);              
-        end
+                if(exp_op == out_xtn.data_out)  
+                    `uvm_info(get_type_name(),
+                                $sformatf("\n[---Data Match successful---] ==> DATA IN = %0d MODE = %0d LOAD = %0d RESET = %0d ==> [ DATA OUT = EXP OUT ] : [%0d = %0d]\n",
+                                        in_xtn.data_in,
+                                        in_xtn.mode,
+                                        in_xtn.load,
+                                        in_xtn.rstn,
+                                        out_xtn.data_out,
+                                        exp_op),
+                                UVM_LOW)  
+                else 
+                    `uvm_error(get_type_name(), $sformatf(
+                                "\n\nScoreboard Error [Data Mismatch]: \n Received Transaction: %d \n Expected Transaction: %d\n",
+                                out_xtn.data_out, exp_op));
+                udm_cg.sample();
+                exp_out(in_xtn);     
+            end         
     endtask 
 
 endclass 
@@ -590,14 +602,8 @@ class test extends uvm_test;
     endfunction
 
     task run_phase(uvm_phase phase);
-
-        //seq_base seqh;
-
         phase.raise_objection(this);
-    
         vseqh.start(envh.vseqrh);
-        //seqh = seq_base::type_id::create("seqh");
-        //seqh.start(envh.drv_agnth.seqrh);
         phase.drop_objection(this);
     endtask 
 endclass 
